@@ -144,11 +144,36 @@ listgpg () {
 	printf '%s\n' "${pw_list[@]}" | sort -n
 }
 
-# get all password files and output as newline-delimited text
+# get all password files and output as newline-delimited text, most recently used first
 list_passwords() {
 	cd "${root}" || exit
 	mapfile -t pw_list < <(listgpg)
-	printf '%s\n' "${pw_list[@]%.gpg}" | sort -n
+	mapfile -t all_passwords < <(printf '%s\n' "${pw_list[@]%.gpg}" | sort -n)
+
+	local history_file="$cache_dir/rofi-pass/history"
+	if [[ ! -r "$history_file" ]]; then
+		printf '%s\n' "${all_passwords[@]}"
+		return
+	fi
+
+	local prefix="${root}: "
+	local prefix_len=${#prefix}
+	mapfile -t recent < <(grep -F "$prefix" "$history_file" | while IFS= read -r line; do printf '%s\n' "${line:$prefix_len}"; done)
+
+	if [[ ${#recent[@]} -eq 0 ]]; then
+		printf '%s\n' "${all_passwords[@]}"
+		return
+	fi
+
+	# Output recent entries that still exist, in history order
+	for entry in "${recent[@]}"; do
+		if printf '%s\n' "${all_passwords[@]}" | grep -qxF "$entry"; then
+			printf '%s\n' "$entry"
+		fi
+	done
+
+	# Output remaining entries not in recent history
+	printf '%s\n' "${all_passwords[@]}" | grep -vxF -f <(printf '%s\n' "${recent[@]}")
 }
 
 doClip () {
@@ -161,6 +186,14 @@ doClip () {
 
 checkIfPass () {
 	printf '%s\n' "${root}: $selected_password" >| "$cache_dir/rofi-pass/last_used"
+	update_history
+}
+
+update_history () {
+	local history_file="$cache_dir/rofi-pass/history"
+	local entry="${root}: ${selected_password}"
+	{ printf '%s\n' "$entry"; grep -vxF "$entry" "$history_file" 2>/dev/null; } | head -100 >| "${history_file}.tmp" \
+		&& mv "${history_file}.tmp" "$history_file"
 }
 
 
@@ -172,6 +205,7 @@ autopass () {
 
 	rm -f "$cache_dir/rofi-pass/last_used"
 	printf '%s\n' "${root}: $selected_password" > "$cache_dir/rofi-pass/last_used"
+	update_history
 	for word in ${stuff["$AUTOTYPE_field"]}; do
 		case "$word" in
 			":tab") ${do_press_key} Tab;;
